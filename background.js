@@ -95,7 +95,7 @@ function getVideoInfo() {
 // Gemini AIで要約する関数
 async function summarizeWithGemini(videoInfo, apiKey) {
   try {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
     
     const prompt = `
       以下のYouTube動画の内容を要約してください。
