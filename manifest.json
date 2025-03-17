@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Summarizer",
+  "version": "1.0",
+  "description": "YouTubeの動画をGemini AIで要約する拡張機能",
+  "permissions": [
+    "contextMenus",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://ai.google.dev/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
