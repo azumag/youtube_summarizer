@@ -1,28 +1,44 @@
 // コンテキストメニューの作成
 chrome.runtime.onInstalled.addListener(() => {
+  // リンク用のコンテキストメニュー
   chrome.contextMenus.create({
-    id: "summarizeYouTube",
+    id: "summarizeYouTubeLink",
     title: "この動画をGemini AIで要約",
     contexts: ["link"],
     targetUrlPatterns: ["*://www.youtube.com/watch?v=*", "*://youtu.be/*"]
+  });
+  
+  // ページ用のコンテキストメニュー（現在視聴中の動画ページ）
+  chrome.contextMenus.create({
+    id: "summarizeYouTubePage",
+    title: "この動画をGemini AIで要約",
+    contexts: ["page"],
+    documentUrlPatterns: ["*://www.youtube.com/watch?v=*"]
   });
 });
 
 // コンテキストメニューがクリックされたときの処理
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "summarizeYouTube") {
-    const youtubeUrl = info.linkUrl;
-    
-    // YouTubeのURLからビデオIDを抽出
-    const videoId = extractVideoId(youtubeUrl);
-    if (!videoId) {
-      console.error("ビデオIDを抽出できませんでした");
-      return;
-    }
-    
-    // ビデオ情報を取得して要約
-    fetchVideoInfoAndSummarize(videoId);
+  let videoUrl;
+  let videoId;
+  
+  if (info.menuItemId === "summarizeYouTubeLink") {
+    // リンクからの要約
+    videoUrl = info.linkUrl;
+    videoId = extractVideoId(videoUrl);
+  } else if (info.menuItemId === "summarizeYouTubePage") {
+    // 現在のページからの要約
+    videoUrl = tab.url;
+    videoId = extractVideoId(videoUrl);
   }
+  
+  if (!videoId) {
+    console.error("ビデオIDを抽出できませんでした");
+    return;
+  }
+  
+  // ビデオ情報を取得して要約
+  fetchVideoInfoAndSummarize(videoId);
 });
 
 // YouTubeのURLからビデオIDを抽出する関数
@@ -80,9 +96,73 @@ async function fetchVideoInfoAndSummarize(videoId) {
 
 // YouTubeページからビデオ情報を取得する関数（コンテンツスクリプトとして実行）
 function getVideoInfo() {
-  const title = document.querySelector('h1.title')?.textContent || document.title;
-  const description = document.querySelector('meta[name="description"]')?.content || '';
-  const channelName = document.querySelector('div#owner-name a')?.textContent || '';
+  // タイトルの取得（複数のセレクタを試行）
+  let title = '';
+  const titleSelectors = [
+    'h1.title.style-scope.ytd-video-primary-info-renderer',
+    'h1.ytd-watch-metadata',
+    'h1.title',
+    '#title h1',
+    '#container h1'
+  ];
+  
+  for (const selector of titleSelectors) {
+    const element = document.querySelector(selector);
+    if (element && element.textContent.trim()) {
+      title = element.textContent.trim();
+      break;
+    }
+  }
+  
+  // タイトルが取得できなかった場合はdocument.titleを使用
+  if (!title) {
+    title = document.title.replace(' - YouTube', '');
+  }
+  
+  // チャンネル名の取得（複数のセレクタを試行）
+  let channelName = '';
+  const channelSelectors = [
+    'ytd-channel-name yt-formatted-string',
+    '#owner-name a',
+    '#channel-name',
+    '#upload-info a',
+    '#owner #text'
+  ];
+  
+  for (const selector of channelSelectors) {
+    const element = document.querySelector(selector);
+    if (element && element.textContent.trim()) {
+      channelName = element.textContent.trim();
+      break;
+    }
+  }
+  
+  // 説明の取得（複数のセレクタを試行）
+  let description = '';
+  const descriptionSelectors = [
+    'meta[name="description"]',
+    '#description-inline-expander',
+    '#description ytd-expander',
+    '#description-text',
+    '#description'
+  ];
+  
+  for (const selector of descriptionSelectors) {
+    const element = document.querySelector(selector);
+    if (element) {
+      if (selector === 'meta[name="description"]') {
+        description = element.content;
+      } else {
+        description = element.textContent.trim();
+      }
+      
+      if (description) {
+        break;
+      }
+    }
+  }
+  
+  console.log('取得した動画情報:', { title, channelName, description });
   
   return {
     title,
