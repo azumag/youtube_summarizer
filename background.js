@@ -32,6 +32,35 @@ function extractVideoId(url) {
   return (match && match[2].length === 11) ? match[2] : null;
 }
 
+// TODO: 字幕を実装するには Oauth 認証が必要
+// {
+//   "error": {
+//     "code": 401,
+//     "message": "API keys are not supported by this API. Expected OAuth2 access token or other authentication credentials that assert a principal. See https://cloud.google.com/docs/authentication",
+//     "errors": [
+//       {
+//         "message": "Login Required.",
+//         "domain": "global",
+//         "reason": "required",
+//         "location": "Authorization",
+//         "locationType": "header"
+//       }
+//     ],
+//     "status": "UNAUTHENTICATED",
+//     "details": [
+//       {
+//         "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+//         "reason": "CREDENTIALS_MISSING",
+//         "domain": "googleapis.com",
+//         "metadata": {
+//           "method": "youtube.api.v3.V3DataCaptionService.Download",
+//           "service": "youtube.googleapis.com"
+//         }
+//       }
+//     ]
+//   }
+// }
+
 async function getYouTubeCaptions(videoId, apiKey) {
   const apiUrl = `https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${videoId}&key=${apiKey}`;
 
