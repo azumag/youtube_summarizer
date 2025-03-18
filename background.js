@@ -62,14 +62,21 @@ async function fetchVideoInfoAndSummarize(videoId) {
         }
         
         const videoInfo = results[0].result;
-        // タブIDを情報に追加
-        videoInfo._tabId = tab.id;
         
-        // Gemini AIで要約
-        const summary = await summarizeWithGemini(videoInfo, geminiApiKey);
-        
-        // 要約結果を表示
-        displaySummary(videoId, videoInfo.title, summary);
+        // 字幕を直接APIから取得
+        try {
+          // 字幕を取得
+          const captions = await fetchCaptionsViaAPI(videoId);
+          
+          // Gemini AIで要約
+          const summary = await summarizeWithGemini(videoInfo, captions, geminiApiKey);
+          
+          // 要約結果を表示
+          displaySummary(videoId, videoInfo.title, summary);
+        } catch (error) {
+          console.error("字幕の取得または要約中にエラーが発生しました", error);
+          displaySummary(videoId, videoInfo.title, "字幕の取得に失敗しました。この動画には字幕が提供されていないか、アクセスできません。");
+        }
         
         // 使用済みのタブを閉じる
         chrome.tabs.remove(tab.id);
@@ -180,224 +187,169 @@ function getVideoInfo() {
   };
 }
 
-// 動画の字幕を取得する関数 - すでに開いているタブを使用するバージョン
-async function fetchVideoCaption(videoId, existingTabId) {
+// YouTubeの字幕をAPIから取得する関数
+async function fetchCaptionsViaAPI(videoId) {
   try {
-    // 既存のタブを使って字幕を取得
-    return new Promise((resolve) => {
+    // 複数の言語コードを試す
+    const languageCodes = ['ja', 'ja-JP', 'en', 'en-US', 'auto'];
+    let captionText = '';
+    
+    // 各言語で試行
+    for (const lang of languageCodes) {
+      // YouTubeの字幕を直接取得するURLを構築
+      const captionUrl = `https://www.youtube.com/api/timedtext?lang=${lang}&v=${videoId}`;
+      
       try {
-        // ページが完全に読み込まれるのを待つ（時間を延長）
-        setTimeout(async () => {
-          try {
-            // トランスクリプトボタンをクリックして字幕を表示するスクリプトを実行
-            await chrome.scripting.executeScript({
-              target: { tabId: existingTabId },
-              function: openTranscriptPanel
-            });
-            
-            // トランスクリプトパネルが開くのを待つ
-            setTimeout(async () => {
-              try {
-                // 字幕を取得するスクリプトを実行
-                const results = await chrome.scripting.executeScript({
-                  target: { tabId: existingTabId },
-                  function: extractCaptionsFromPage
-                });
-                
-                if (!results || !results[0]) {
-                  console.warn("字幕の取得に失敗しました");
-                  resolve("");
-                } else {
-                  const captionText = results[0].result || "";
-                  console.log("取得した字幕:", captionText.substring(0, 100) + "...");
-                  resolve(captionText);
-                }
-              } catch (error) {
-                console.error("字幕抽出中にエラーが発生しました", error);
-                resolve("");
-              }
-            }, 2000);
-          } catch (error) {
-            console.error("トランスクリプトパネルの開封中にエラーが発生しました", error);
-            resolve("");
+        const response = await fetch(captionUrl);
+        if (!response.ok) {
+          continue; // この言語では取得できなかった、次の言語を試す
+        }
+        
+        const xmlText = await response.text();
+        if (xmlText && xmlText.includes('<text')) {
+          // XMLから字幕テキストを抽出
+          captionText = parseTimedTextXML(xmlText);
+          if (captionText) {
+            // 成功した場合はループを抜ける
+            break;
           }
-        }, 3000);
-      } catch (e) {
-        console.error("字幕取得中にエラーが発生しました", e);
-        resolve("");
+        }
+      } catch (error) {
+        console.warn(`言語 "${lang}" での字幕取得に失敗: ${error.message}`);
+        // このエラーは無視して次の言語を試す
       }
-    });
+    }
+    
+    // 字幕が取得できなかった場合は代替APIも試す
+    if (!captionText) {
+      console.log("標準APIでの字幕取得に失敗、代替APIを試行します...");
+      captionText = await fetchCaptionsViaAlternativeAPI(videoId);
+    }
+    
+    return captionText;
   } catch (error) {
-    console.error("字幕取得処理中にエラーが発生しました", error);
+    console.error("すべての字幕取得方法に失敗しました", error);
     return "";
   }
 }
 
-// トランスクリプトパネルを開く関数
-function openTranscriptPanel() {
+// 代替方法でYouTubeの字幕を取得する関数
+async function fetchCaptionsViaAlternativeAPI(videoId) {
   try {
-    // トランスクリプトボタンを探す
-    const findTranscriptButton = () => {
-      // さまざまなセレクタでトランスクリプトボタンを検索
-      const selectors = [
-        'button[aria-label="Show transcript"]',
-        'button[aria-label="文字起こしを表示"]',
-        'ytd-menu-renderer yt-button-shape button',
-        '#items ytd-menu-service-item-renderer',
-        'button.ytp-subtitles-button',
-        // メニュー内のテキストで検索
-        ...Array.from(document.querySelectorAll('button')).filter(b => 
-          b.textContent.includes('transcript') || 
-          b.textContent.includes('文字起こし') || 
-          b.textContent.includes('Transcript') ||
-          b.textContent.includes('Caption')
-        )
-      ];
-      
-      for (const selector of selectors) {
-        const elements = typeof selector === 'string' 
-          ? Array.from(document.querySelectorAll(selector))
-          : [selector];
-          
-        for (const el of elements) {
-          if (el && (
-              el.textContent.includes('transcript') || 
-              el.textContent.includes('文字起こし') ||
-              // アイコンだけのボタンの場合はaria-labelで判断
-              el.getAttribute('aria-label')?.includes('transcript') ||
-              el.getAttribute('aria-label')?.includes('文字起こし')
-            )) {
-            return el;
-          }
+    // YouTubeの非公式APIで字幕リストを取得
+    const listUrl = `https://video.google.com/timedtext?type=list&v=${videoId}`;
+    const listResponse = await fetch(listUrl);
+    const listXml = await listResponse.text();
+    
+    // 字幕トラックがあるか確認
+    if (!listXml || !listXml.includes('<track')) {
+      return "";
+    }
+    
+    // 利用可能な字幕トラックから言語とトラックIDを抽出
+    const trackMatches = listXml.match(/<track([^>]*)>/g);
+    if (!trackMatches || trackMatches.length === 0) {
+      return "";
+    }
+    
+    // 優先順位: 日本語 > 英語 > その他
+    const preferredLangs = ['ja', 'jp', 'en', ''];
+    let targetTrack = null;
+    
+    for (const prefLang of preferredLangs) {
+      // 優先言語に合致するトラックを探す
+      for (const track of trackMatches) {
+        if (prefLang === '' || track.toLowerCase().includes(`lang_code="${prefLang}"`)) {
+          targetTrack = track;
+          break;
         }
       }
       
-      // メニューボタンの探索（...ボタン）
-      const menuButtons = Array.from(document.querySelectorAll('button')).filter(b => 
-        b.textContent.includes('More') || 
-        b.textContent.includes('その他') ||
-        b.getAttribute('aria-label')?.includes('More actions') ||
-        b.getAttribute('aria-label')?.includes('その他の操作')
-      );
-      
-      return menuButtons[0];
-    };
-    
-    const transcriptButton = findTranscriptButton();
-    
-    if (transcriptButton) {
-      transcriptButton.click();
-      console.log("トランスクリプトボタンをクリックしました");
-      
-      // メニューが表示されるのを待つ
-      setTimeout(() => {
-        // メニュー内のトランスクリプトオプションを探す
-        const transcriptOption = Array.from(document.querySelectorAll('ytd-menu-service-item-renderer')).find(
-          item => item.textContent.includes('transcript') || 
-                 item.textContent.includes('文字起こし')
-        );
-        
-        if (transcriptOption) {
-          transcriptOption.click();
-          console.log("トランスクリプトオプションをクリックしました");
-        }
-      }, 1000);
+      if (targetTrack) break;
     }
+    
+    if (!targetTrack) {
+      // 言語指定なしで最初のトラックを試す
+      targetTrack = trackMatches[0];
+    }
+    
+    // トラックから言語コードとトラックIDを抽出
+    const langMatch = targetTrack.match(/lang_code="([^"]*)"/);
+    const nameMatch = targetTrack.match(/name="([^"]*)"/);
+    
+    if (!langMatch) {
+      return "";
+    }
+    
+    const langCode = langMatch[1];
+    const trackName = nameMatch ? nameMatch[1] : "";
+    
+    // 特定の言語の字幕を取得
+    const captionUrl = `https://video.google.com/timedtext?lang=${langCode}${trackName ? `&name=${encodeURIComponent(trackName)}` : ""}&v=${videoId}`;
+    const response = await fetch(captionUrl);
+    
+    if (!response.ok) {
+      return "";
+    }
+    
+    const xmlText = await response.text();
+    if (!xmlText || !xmlText.includes('<text')) {
+      return "";
+    }
+    
+    // XMLから字幕テキストを抽出
+    return parseTimedTextXML(xmlText);
   } catch (error) {
-    console.error("トランスクリプトパネルを開く際にエラーが発生しました", error);
+    console.error("代替API経由での字幕取得に失敗しました", error);
+    return "";
   }
 }
 
-// ページから字幕を抽出する関数（コンテンツスクリプトとして実行）
-function extractCaptionsFromPage() {
+// XML形式の字幕データからテキストを抽出する関数
+function parseTimedTextXML(xmlText) {
   try {
-    // 異なる種類のトランスクリプト要素セレクタを試す
-    const selectors = [
-      'ytd-transcript-segment-renderer',
-      '.ytd-transcript-segment-renderer',
-      '.segment-text',
-      '.caption-visual-line',
-      '.caption-window',
-      '.ytp-caption-segment'
-    ];
+    // XMLパーサーを使用
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlText, "text/xml");
     
-    let captionElements = [];
+    // すべてのtextノードを取得
+    const textNodes = xmlDoc.getElementsByTagName('text');
+    if (!textNodes || textNodes.length === 0) {
+      return "";
+    }
     
-    // 各セレクタを試す
-    for (const selector of selectors) {
-      const elements = document.querySelectorAll(selector);
-      if (elements && elements.length > 0) {
-        captionElements = Array.from(elements);
-        break;
+    // 各テキストノードからテキストを抽出し連結
+    let captionText = '';
+    for (let i = 0; i < textNodes.length; i++) {
+      // HTMLエンティティをデコードして追加
+      const textContent = textNodes[i].textContent
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'");
+      
+      if (textContent.trim()) {
+        captionText += textContent.trim() + '\n';
       }
     }
     
-    // 字幕要素が見つかった場合
-    if (captionElements.length > 0) {
-      return captionElements
-        .map(item => {
-          // 異なる構造に対応するため複数のセレクタを試す
-          const textElement = 
-            item.querySelector('#content') || 
-            item.querySelector('.segment-text') || 
-            item.querySelector('.caption-visual-line') || 
-            item;
-          
-          return textElement ? textElement.textContent.trim() : '';
-        })
-        .filter(text => text) // 空の文字列を除外
-        .join('\n'); // 空白ではなく改行で結合して構造を保持
-    }
-    
-    // 代替手段：ビデオ要素から字幕を取得
-    const videoElement = document.querySelector('video');
-    if (videoElement && videoElement.textTracks && videoElement.textTracks.length > 0) {
-      for (const track of videoElement.textTracks) {
-        if (track.kind === 'subtitles' || track.kind === 'captions') {
-          track.mode = 'showing';
-          const cues = track.cues;
-          if (cues && cues.length > 0) {
-            return Array.from(cues)
-              .map(cue => cue.text)
-              .join('\n');
-          }
-        }
-      }
-    }
-    
-    // 説明からキーワードを抽出（字幕が見つからない場合のフォールバック）
-    const description = document.querySelector('meta[name="description"]')?.content || 
-                        document.querySelector('#description-text')?.textContent || 
-                        document.querySelector('#description')?.textContent || '';
-    
-    return description;
+    return captionText;
   } catch (error) {
-    console.error("字幕抽出中にエラーが発生しました", error);
+    console.error("字幕XMLの解析に失敗しました", error);
     return "";
   }
 }
 
 // Gemini AIで要約する関数
-async function summarizeWithGemini(videoInfo, apiKey) {
+async function summarizeWithGemini(videoInfo, captions, apiKey) {
   try {
     const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-    
-    // videoInfoオブジェクトからタブIDを取得（動的に追加されたプロパティ）
-    const existingTabId = videoInfo._tabId;
-    if (!existingTabId) {
-      console.error("タブIDが見つかりません");
-      return "技術的なエラーが発生しました。もう一度お試しください。";
-    }
-    
-    // 既存のタブを使用して字幕を取得
-    const captions = await fetchVideoCaption(extractVideoId(videoInfo.url), existingTabId);
     
     // 字幕があるかどうかをチェック
     if (!captions || captions.trim().length === 0) {
       return "この動画には字幕情報がないため、要約を生成できません。\n\n字幕が利用可能な動画で再度お試しください。";
     }
-
-    console.log(captions);
     
     // 字幕のみを使用した要約のためのプロンプト
     const prompt = `
