@@ -20,25 +20,22 @@ chrome.runtime.onInstalled.addListener(() => {
 // コンテキストメニューがクリックされたときの処理
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   let videoUrl;
-  let videoId;
   
   if (info.menuItemId === "summarizeYouTubeLink") {
     // リンクからの要約
     videoUrl = info.linkUrl;
-    videoId = extractVideoId(videoUrl);
   } else if (info.menuItemId === "summarizeYouTubePage") {
     // 現在のページからの要約
     videoUrl = tab.url;
-    videoId = extractVideoId(videoUrl);
   }
   
-  if (!videoId) {
-    console.error("ビデオIDを抽出できませんでした");
+  if (!videoUrl) {
+    console.error("動画URLを取得できませんでした");
     return;
   }
   
-  // ビデオ情報を取得して要約
-  fetchVideoInfoAndSummarize(videoId);
+  // Gemini AIのウェブサイトを開いて要約
+  openGeminiWithPrompt(videoUrl);
 });
 
 // YouTubeのURLからビデオIDを抽出する関数
@@ -228,4 +225,121 @@ function displaySummary(videoId, title, summary) {
     width: 600,
     height: 600
   });
+}
+
+// Gemini AIのウェブサイトを開いてプロンプトを自動入力する関数
+function openGeminiWithPrompt(videoUrl) {
+  // 既に開いているGemini AIのタブを探す
+  chrome.tabs.query({ url: "https://gemini.google.com/*" }, (tabs) => {
+    const prompt = `この動画を要約して：${videoUrl}`;
+    
+    if (tabs.length > 0) {
+      // 既存のタブが見つかった場合
+      const existingTab = tabs[0];
+      
+      // タブをアクティブにする
+      chrome.windows.update(existingTab.windowId, { focused: true });
+      chrome.tabs.update(existingTab.id, { active: true });
+      
+      // プロンプトを入力して送信
+      chrome.tabs.sendMessage(existingTab.id, {
+        action: "injectPrompt",
+        prompt: prompt
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("メッセージの送信に失敗しました:", chrome.runtime.lastError);
+          // コンテンツスクリプトが応答しない場合は、スクリプトを直接実行
+          chrome.scripting.executeScript({
+            target: { tabId: existingTab.id },
+            func: injectPrompt,
+            args: [prompt]
+          });
+        }
+      });
+    } else {
+      // 新しいウィンドウでGemini AIを開く
+      chrome.windows.create({
+        url: "https://gemini.google.com/app?hl=ja",
+        type: "popup",
+        width: 800,
+        height: 700
+      }, (window) => {
+        // ウィンドウが作成されたら、タブIDを取得
+        const tabId = window.tabs[0].id;
+        
+        // タブが完全に読み込まれるのを待ってからスクリプトを実行
+        chrome.tabs.onUpdated.addListener(function listener(updatedTabId, changeInfo) {
+          if (updatedTabId === tabId && changeInfo.status === 'complete') {
+            // リスナーを削除（一度だけ実行するため）
+            chrome.tabs.onUpdated.removeListener(listener);
+            
+            // プロンプトを入力して送信するスクリプトを実行
+            setTimeout(() => {
+              chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                func: injectPrompt,
+                args: [prompt]
+              });
+            }, 1500); // ページが完全に読み込まれるのを待つため少し遅延
+          }
+        });
+      });
+    }
+  });
+}
+
+// Gemini AIのページにプロンプトを入力して送信する関数
+function injectPrompt(prompt) {
+  // テキストエリアを探す
+  const textareas = document.querySelectorAll('textarea');
+  let promptTextarea = null;
+  
+  // プロンプト入力欄を探す
+  for (const textarea of textareas) {
+    if (textarea.placeholder && 
+        (textarea.placeholder.includes('Gemini') || 
+         textarea.placeholder.includes('質問') || 
+         textarea.placeholder.includes('プロンプト'))) {
+      promptTextarea = textarea;
+      break;
+    }
+  }
+  
+  // テキストエリアが見つからない場合は、最後のテキストエリアを使用
+  if (!promptTextarea && textareas.length > 0) {
+    promptTextarea = textareas[textareas.length - 1];
+  }
+  
+  if (promptTextarea) {
+    // プロンプトを入力
+    promptTextarea.value = prompt;
+    
+    // 入力イベントをトリガー
+    promptTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+    
+    // 送信ボタンを探す
+    setTimeout(() => {
+      // 送信ボタンを探す（複数の可能性があるセレクタを試す）
+      const sendButtons = [
+        ...document.querySelectorAll('button[aria-label="送信"]'),
+        ...document.querySelectorAll('button[aria-label="Submit"]'),
+        ...document.querySelectorAll('button[type="submit"]'),
+        ...document.querySelectorAll('button svg[viewBox]') // SVGアイコンを持つボタン
+      ];
+      
+      // 送信ボタンが見つかった場合はクリック
+      for (const button of sendButtons) {
+        const actualButton = button.closest('button') || button;
+        if (actualButton && actualButton.offsetParent !== null) { // 表示されているボタンのみ
+          actualButton.click();
+          console.log('送信ボタンをクリックしました');
+          return;
+        }
+      }
+      
+      console.log('送信ボタンが見つかりませんでした');
+    }, 500);
+  } else {
+    console.error('プロンプト入力欄が見つかりませんでした');
+  }
 }
