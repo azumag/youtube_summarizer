@@ -90,20 +90,8 @@ function injectPromptAndSubmit(prompt) {
     promptTextarea.value = prompt;
     promptTextarea.textContent = prompt; // contenteditable要素の場合
     
-    // 複数のイベントをトリガー
-    const events = ['input', 'change', 'keyup', 'keydown', 'keypress'];
-    events.forEach(eventType => {
-      promptTextarea.dispatchEvent(new Event(eventType, { bubbles: true }));
-    });
-    
-    // Enterキーイベントをシミュレート
-    promptTextarea.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Enter',
-      code: 'Enter',
-      keyCode: 13,
-      which: 13,
-      bubbles: true
-    }));
+    // 入力イベントのみをトリガー（他のイベントは送信しない）
+    promptTextarea.dispatchEvent(new Event('input', { bubbles: true }));
     
     // 送信ボタンを探す
     setTimeout(() => {
@@ -122,21 +110,14 @@ function injectPromptAndSubmit(prompt) {
       const sendButton = findElementByMultipleSelectors(buttonSelectors);
       
       if (sendButton) {
-        console.log('送信ボタンが見つかりました。クリックする前に待機します');
-        setTimeout(() => {
-          console.log('送信ボタンをクリックします');
-          sendButton.click();
-        }, 1000); // ボタンをクリックするまで1秒待機
+        console.log('送信ボタンが見つかりました。クリックします');
+        // 一度だけクリック
+        sendButton.click();
         return;
       }
       
-      // ボタンが見つからない場合は、すべてのボタンをログに出力（デバッグ用）
-      console.log('送信ボタンが見つかりませんでした。すべてのボタンを確認:');
-      document.querySelectorAll('button').forEach((btn, i) => {
-        console.log(`ボタン ${i}:`, btn.outerHTML);
-      });
-      
-      // Enterキーイベントを再度送信（ボタンが見つからない場合）
+      // ボタンが見つからない場合のみ、Enterキーイベントを送信
+      console.log('送信ボタンが見つかりませんでした。Enterキーを送信します');
       promptTextarea.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Enter',
         code: 'Enter',
@@ -146,7 +127,7 @@ function injectPromptAndSubmit(prompt) {
         cancelable: true
       }));
       
-    }, 1000); // ボタンを探すまでの待機時間を長めに設定
+    }, 1000); // ボタンを探すまでの待機時間
   } else {
     console.error('プロンプト入力欄が見つかりませんでした。ページ構造:', document.body.innerHTML.substring(0, 500) + '...');
   }
