@@ -62,6 +62,8 @@ async function fetchVideoInfoAndSummarize(videoId) {
         }
         
         const videoInfo = results[0].result;
+        // タブIDを情報に追加
+        videoInfo._tabId = tab.id;
         
         // Gemini AIで要約
         const summary = await summarizeWithGemini(videoInfo, geminiApiKey);
@@ -178,57 +180,52 @@ function getVideoInfo() {
   };
 }
 
-// 動画の字幕を取得する関数
-async function fetchVideoCaption(videoId) {
+// 動画の字幕を取得する関数 - すでに開いているタブを使用するバージョン
+async function fetchVideoCaption(videoId, existingTabId) {
   try {
-    // 字幕を取得するためのURLを構築
-    const captionUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    
-    // 新しいタブで字幕ページを開く
+    // 既存のタブを使って字幕を取得
     return new Promise((resolve) => {
-      chrome.tabs.create({ url: captionUrl, active: false }, async (tab) => {
-        try {
-          // ページが完全に読み込まれるのを待つ（時間を延長）
-          await new Promise(r => setTimeout(r, 5000));
-          
-          // トランスクリプトボタンをクリックして字幕を表示するスクリプトを実行
-          chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            function: openTranscriptPanel
-          });
-          
-          // トランスクリプトパネルが開くのを待つ
-          await new Promise(r => setTimeout(r, 2000));
-          
-          // 字幕を取得するスクリプトを実行
-          chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            function: extractCaptionsFromPage
-          }, (results) => {
-            try {
-              // タブを閉じる
-              chrome.tabs.remove(tab.id);
-              
-              if (chrome.runtime.lastError || !results || !results[0]) {
-                console.warn("字幕の取得に失敗しました", chrome.runtime.lastError);
-                resolve(""); // 空の文字列を返す
-              } else {
-                const captionText = results[0].result || "";
-                console.log("取得した字幕:", captionText.substring(0, 100) + "...");
-                resolve(captionText);
+      try {
+        // ページが完全に読み込まれるのを待つ（時間を延長）
+        setTimeout(async () => {
+          try {
+            // トランスクリプトボタンをクリックして字幕を表示するスクリプトを実行
+            await chrome.scripting.executeScript({
+              target: { tabId: existingTabId },
+              function: openTranscriptPanel
+            });
+            
+            // トランスクリプトパネルが開くのを待つ
+            setTimeout(async () => {
+              try {
+                // 字幕を取得するスクリプトを実行
+                const results = await chrome.scripting.executeScript({
+                  target: { tabId: existingTabId },
+                  function: extractCaptionsFromPage
+                });
+                
+                if (!results || !results[0]) {
+                  console.warn("字幕の取得に失敗しました");
+                  resolve("");
+                } else {
+                  const captionText = results[0].result || "";
+                  console.log("取得した字幕:", captionText.substring(0, 100) + "...");
+                  resolve(captionText);
+                }
+              } catch (error) {
+                console.error("字幕抽出中にエラーが発生しました", error);
+                resolve("");
               }
-            } catch (e) {
-              console.error("字幕処理中にエラーが発生しました", e);
-              chrome.tabs.remove(tab.id);
-              resolve("");
-            }
-          });
-        } catch (e) {
-          console.error("字幕取得中にエラーが発生しました", e);
-          chrome.tabs.remove(tab.id);
-          resolve("");
-        }
-      });
+            }, 2000);
+          } catch (error) {
+            console.error("トランスクリプトパネルの開封中にエラーが発生しました", error);
+            resolve("");
+          }
+        }, 3000);
+      } catch (e) {
+        console.error("字幕取得中にエラーが発生しました", e);
+        resolve("");
+      }
     });
   } catch (error) {
     console.error("字幕取得処理中にエラーが発生しました", error);
@@ -385,8 +382,15 @@ async function summarizeWithGemini(videoInfo, apiKey) {
   try {
     const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
     
-    // 字幕を取得
-    const captions = await fetchVideoCaption(extractVideoId(videoInfo.url));
+    // videoInfoオブジェクトからタブIDを取得（動的に追加されたプロパティ）
+    const existingTabId = videoInfo._tabId;
+    if (!existingTabId) {
+      console.error("タブIDが見つかりません");
+      return "技術的なエラーが発生しました。もう一度お試しください。";
+    }
+    
+    // 既存のタブを使用して字幕を取得
+    const captions = await fetchVideoCaption(extractVideoId(videoInfo.url), existingTabId);
     
     // 字幕があるかどうかをチェック
     if (!captions || captions.trim().length === 0) {
