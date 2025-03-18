@@ -79,7 +79,7 @@ function openGeminiWithPrompt(videoUrl) {
       chrome.windows.create({
         url: "https://gemini.google.com/app?hl=ja",
         type: "popup",
-        width: 800,
+        width: 500,
         height: 700
       }, (window) => {
         // ウィンドウが作成されたら、タブIDを取得
