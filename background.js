@@ -83,15 +83,16 @@ async function fetchVideoInfoAndSummarize(videoId) {
     // 字幕が取得できたかチェック
     if (!captions || captions.trim().length === 0) {
       // 字幕がない場合、その旨を表示
-      displaySummary(videoId, videoInfo.title, "この動画には字幕情報がないため、要約を生成できません。\n\n字幕が利用可能な動画で再度お試しください。");
+      displaySummary(videoId, "", "この動画には字幕情報がないため、要約を生成できません。\n\n字幕が利用可能な動画で再度お試しください。");
       return;
     }
         
     // Gemini AIで要約
-    const summary = await summarizeWithGemini(videoInfo, captions, geminiApiKey);
+    const summary = await summarizeWithGemini(captions, geminiApiKey);
         
     // 要約結果を表示
-    displaySummary(videoId, videoInfo.title, summary);
+    // TODO: videoInfo
+    displaySummary(videoId, "", summary);
   } catch (error) {
     console.error("要約処理の初期化中にエラーが発生しました", error);
     processingSummaryTab = null;
@@ -99,7 +100,7 @@ async function fetchVideoInfoAndSummarize(videoId) {
 }
 
 // Gemini AIで要約する関数
-async function summarizeWithGemini(videoInfo, captions, apiKey) {
+async function summarizeWithGemini(captions, apiKey) {
   try {
     const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
     
