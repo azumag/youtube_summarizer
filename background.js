@@ -396,6 +396,8 @@ async function summarizeWithGemini(videoInfo, apiKey) {
     if (!captions || captions.trim().length === 0) {
       return "この動画には字幕情報がないため、要約を生成できません。\n\n字幕が利用可能な動画で再度お試しください。";
     }
+
+    console.log(captions);
     
     // 字幕のみを使用した要約のためのプロンプト
     const prompt = `
