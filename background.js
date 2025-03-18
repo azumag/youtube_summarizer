@@ -32,58 +32,139 @@ function extractVideoId(url) {
   return (match && match[2].length === 11) ? match[2] : null;
 }
 
-// TODO: 字幕を実装するには Oauth 認証が必要
-// {
-//   "error": {
-//     "code": 401,
-//     "message": "API keys are not supported by this API. Expected OAuth2 access token or other authentication credentials that assert a principal. See https://cloud.google.com/docs/authentication",
-//     "errors": [
-//       {
-//         "message": "Login Required.",
-//         "domain": "global",
-//         "reason": "required",
-//         "location": "Authorization",
-//         "locationType": "header"
-//       }
-//     ],
-//     "status": "UNAUTHENTICATED",
-//     "details": [
-//       {
-//         "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-//         "reason": "CREDENTIALS_MISSING",
-//         "domain": "googleapis.com",
-//         "metadata": {
-//           "method": "youtube.api.v3.V3DataCaptionService.Download",
-//           "service": "youtube.googleapis.com"
-//         }
-//       }
-//     ]
-//   }
-// }
-
+// OAuth認証を使用して字幕情報を取得する関数
 async function getYouTubeCaptions(videoId) {
-  // ここは Oauth を使う様に再実装する必要がある
-  const apiUrl = `https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${videoId}&key=${apiKey}`;
-
   try {
-    const response = await fetch(apiUrl);
-    const data = await response.json();
-
-    if (data.items && data.items.length > 0) {
-      const captionId = data.items[0].id;
-      const captionUrl = `https://www.googleapis.com/youtube/v3/captions/${captionId}?part=snippet&key=${apiKey}`;
-
-      const captionResponse = await fetch(captionUrl);
-      const captionData = await captionResponse.text();
-
-      return captionData;
-    } else {
-      return "字幕が見つかりませんでした。";
+    // ストレージからOAuth認証トークンを取得
+    const { youtubeAuthToken } = await chrome.storage.sync.get('youtubeAuthToken');
+    
+    if (!youtubeAuthToken) {
+      console.error("YouTube API認証トークンが見つかりません");
+      return "YouTube APIの認証が必要です。拡張機能のポップアップから認証を行ってください。";
     }
+    
+    // 字幕リストを取得
+    const captionsListUrl = `https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${videoId}`;
+    const captionsListResponse = await fetch(captionsListUrl, {
+      headers: {
+        'Authorization': `Bearer ${youtubeAuthToken}`
+      }
+    });
+    
+    // レスポンスをチェック
+    if (!captionsListResponse.ok) {
+      const errorData = await captionsListResponse.json();
+      console.error("字幕リストの取得に失敗しました:", errorData);
+      
+      // トークンが無効な場合は認証エラーを返す
+      if (captionsListResponse.status === 401) {
+        // 無効なトークンを削除
+        chrome.identity.removeCachedAuthToken({ token: youtubeAuthToken }, () => {
+          chrome.storage.sync.remove('youtubeAuthToken');
+        });
+        return "認証の有効期限が切れています。拡張機能のポップアップから再認証を行ってください。";
+      }
+      
+      return `字幕リストの取得に失敗しました: ${errorData.error?.message || '不明なエラー'}`;
+    }
+    
+    const captionsData = await captionsListResponse.json();
+    
+    // 字幕が見つからない場合
+    if (!captionsData.items || captionsData.items.length === 0) {
+      return "この動画には字幕が見つかりませんでした。";
+    }
+    
+    // 優先順位: 日本語 > 英語 > 最初の字幕
+    let selectedCaption = null;
+    
+    // 日本語字幕を探す
+    selectedCaption = captionsData.items.find(caption => 
+      caption.snippet.language === 'ja' || 
+      caption.snippet.language === 'jpn' ||
+      caption.snippet.language === 'japanese'
+    );
+    
+    // 日本語字幕がなければ英語字幕を探す
+    if (!selectedCaption) {
+      selectedCaption = captionsData.items.find(caption => 
+        caption.snippet.language === 'en' || 
+        caption.snippet.language === 'eng' ||
+        caption.snippet.language === 'english'
+      );
+    }
+    
+    // それでも見つからなければ最初の字幕を使用
+    if (!selectedCaption) {
+      selectedCaption = captionsData.items[0];
+    }
+    
+    // 字幕IDを取得
+    const captionId = selectedCaption.id;
+    const captionLanguage = selectedCaption.snippet.language || '不明';
+    
+    // 字幕をダウンロード
+    const captionDownloadUrl = `https://www.googleapis.com/youtube/v3/captions/${captionId}?tfmt=srt`;
+    const captionResponse = await fetch(captionDownloadUrl, {
+      headers: {
+        'Authorization': `Bearer ${youtubeAuthToken}`
+      }
+    });
+    
+    if (!captionResponse.ok) {
+      const errorData = await captionResponse.json();
+      console.error("字幕のダウンロードに失敗しました:", errorData);
+      return `字幕のダウンロードに失敗しました: ${errorData.error?.message || '不明なエラー'}`;
+    }
+    
+    // SRT形式の字幕テキストを取得
+    const srtText = await captionResponse.text();
+    
+    // SRT形式から純粋なテキストに変換
+    const plainText = parseSrtToPlainText(srtText);
+    
+    return `【字幕言語: ${captionLanguage}】\n\n${plainText}`;
+    
   } catch (error) {
     console.error("字幕の取得中にエラーが発生しました:", error);
-    return "エラーが発生しました。";
+    return `字幕の取得中にエラーが発生しました: ${error.message}`;
   }
+}
+
+// SRT形式の字幕を純粋なテキストに変換する関数
+function parseSrtToPlainText(srtText) {
+  // SRTの各エントリは数字、タイムスタンプ、テキストの順に並んでいる
+  const lines = srtText.split('\n');
+  let plainText = '';
+  let isTextLine = false;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    
+    // 空行はテキストブロックの終わりを示す
+    if (line === '') {
+      isTextLine = false;
+      continue;
+    }
+    
+    // 数字だけの行はエントリ番号
+    if (/^\d+$/.test(line)) {
+      continue;
+    }
+    
+    // --> を含む行はタイムスタンプ
+    if (line.includes('-->')) {
+      isTextLine = true;
+      continue;
+    }
+    
+    // それ以外はテキスト行
+    if (isTextLine) {
+      plainText += line + ' ';
+    }
+  }
+  
+  return plainText.trim();
 }
 
 // ビデオ情報を取得して要約する関数

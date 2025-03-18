@@ -7,12 +7,21 @@
     "contextMenus",
     "storage",
     "tabs",
-    "scripting"
+    "scripting",
+    "identity"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
-    "https://ai.google.dev/*"
+    "https://ai.google.dev/*",
+    "https://accounts.google.com/*",
+    "https://www.googleapis.com/*"
   ],
+  "oauth2": {
+    "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/youtube.force-ssl"
+    ]
+  },
   "background": {
     "service_worker": "background.js"
   },

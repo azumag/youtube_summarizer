@@ -24,6 +24,7 @@
       border-radius: 8px;
       padding: 15px;
       box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+      margin-bottom: 15px;
     }
     .form-group {
       margin-bottom: 15px;
@@ -96,12 +97,45 @@
       font-size: 11px;
       color: #666;
     }
+    .auth-container {
+      background-color: white;
+      border-radius: 8px;
+      padding: 15px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+    .auth-status {
+      font-size: 14px;
+      margin-bottom: 10px;
+      padding: 8px;
+      border-radius: 4px;
+    }
+    .auth-not-signed {
+      background-color: #fff3cd;
+      color: #856404;
+    }
+    .auth-signed {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    .google-button {
+      background-color: #4285F4;
+    }
+    .google-button:hover {
+      background-color: #357ae8;
+    }
+    .section-title {
+      font-size: 16px;
+      margin-top: 0;
+      margin-bottom: 10px;
+      color: #333;
+    }
   </style>
 </head>
 <body>
   <h1>YouTube Summarizer</h1>
 
   <div class="container">
+    <h2 class="section-title">Gemini AI 設定</h2>
     <div class="form-group">
       <label for="apiKey">Gemini AI APIキー</label>
       <input type="text" id="apiKey" placeholder="APIキーを入力してください">
@@ -115,8 +149,17 @@
     <div id="status" class="status"></div>
   </div>
   
+  <div class="auth-container">
+    <h2 class="section-title">YouTube API 認証</h2>
+    <div id="authStatus" class="auth-status auth-not-signed">
+      YouTube APIへのアクセスが認証されていません。字幕情報を取得するには認証が必要です。
+    </div>
+    
+    <button id="authButton" class="google-button">Googleアカウントで認証</button>
+  </div>
+  
   <div class="history" id="historyContainer">
-    <h2 style="font-size: 16px; margin-top: 0;">最近の要約</h2>
+    <h2 class="section-title">最近の要約</h2>
     <div id="historyItems">
       <!-- 履歴アイテムがここに動的に追加されます -->
     </div>
