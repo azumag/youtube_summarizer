@@ -58,82 +58,121 @@ function displaySummary(summaryData) {
 // 要約テキストを解析して表示する関数
 function parseSummaryText(summaryText) {
   try {
-    // 要約テキストを行に分割
-    const lines = summaryText.split('\n').filter(line => line.trim() !== '');
+    // 前処理：マークダウン見出しやその他の特殊フォーマットを正規化
+    let normalizedText = summaryText.replace(/^#+\s+/gm, ''); // マークダウン見出しを削除
     
-    let mainTopic = '';
+    // セクションを分離するための正規則を定義
+    const topicRegexes = [
+      /(?:^|\n)(?:主なトピック|メイントピック|トピック|概要|動画の概要|1\.\s*(?:主な)?トピック)(?:\s*[:：]|\n)/i,
+      /(?:^|\n)(?:I\.|1\.|1）|【概要】)/i
+    ];
+    
+    const pointsRegexes = [
+      /(?:^|\n)(?:重要(?:な|の)ポイント|主要(?:な|の)ポイント|ポイント|要点|重要点|2\.\s*(?:重要(?:な|の)?)?ポイント)(?:\s*[:：]|\n)/i,
+      /(?:^|\n)(?:II\.|2\.|2）|【ポイント】)/i
+    ];
+    
+    const conclusionRegexes = [
+      /(?:^|\n)(?:結論|まとめ|総括|最後に|3\.\s*(?:結論|まとめ))(?:\s*[:：]|\n)/i,
+      /(?:^|\n)(?:III\.|3\.|3）|【結論】|【まとめ】)/i
+    ];
+    
+    // テキストからセクションを抽出する関数
+    const extractSection = (text, startRegexes, endRegexes) => {
+      // startRegexesのいずれかにマッチする位置を見つける
+      let startMatch = null;
+      let startIdx = -1;
+      
+      for (const regex of startRegexes) {
+        const match = text.match(regex);
+        if (match && (startIdx === -1 || match.index < startIdx)) {
+          startMatch = match;
+          startIdx = match.index;
+        }
+      }
+      
+      if (startIdx === -1) return null;
+      
+      // スタートのマッチの後ろから始める
+      const contentStartIdx = startIdx + startMatch[0].length;
+      
+      // 次のセクションが始まる位置を見つける
+      let endIdx = text.length;
+      
+      for (const regex of endRegexes) {
+        const match = text.substring(contentStartIdx).match(regex);
+        if (match && contentStartIdx + match.index < endIdx) {
+          endIdx = contentStartIdx + match.index;
+        }
+      }
+      
+      // セクションのコンテンツを返す
+      return text.substring(contentStartIdx, endIdx).trim();
+    };
+    
+    // セクションを抽出
+    let mainTopic = extractSection(normalizedText, topicRegexes, [...pointsRegexes, ...conclusionRegexes]) || '';
+    let pointsSection = extractSection(normalizedText, pointsRegexes, conclusionRegexes) || '';
+    let conclusion = extractSection(normalizedText, conclusionRegexes, []) || '';
+    
+    // ポイントを箇条書きに分解
     let keyPoints = [];
-    let conclusion = '';
     
-    // 現在の解析モード
-    let currentMode = 'none';
-    
-    // 各行を解析
-    for (const line of lines) {
-      const trimmedLine = line.trim();
+    // ポイントセクションがある場合は解析
+    if (pointsSection) {
+      // 箇条書きの行を検出 (-, •, *, 数字+ドットなど)
+      const bulletPointsMatch = pointsSection.match(/(?:^|\n)[-•*][\s]*.+(?:\n|$)|(?:^|\n)\d+[\.\)][^\n]+(?:\n|$)/g);
       
-      // 主なトピックの検出
-      if (trimmedLine.match(/^1\.\s+.*トピック/) || 
-          trimmedLine.match(/^主なトピック/i)) {
-        currentMode = 'topic';
-        continue;
-      }
-      
-      // 重要なポイントの検出
-      if (trimmedLine.match(/^2\.\s+.*ポイント/) || 
-          trimmedLine.match(/^重要なポイント/i)) {
-        currentMode = 'points';
-        continue;
-      }
-      
-      // 結論の検出
-      if (trimmedLine.match(/^3\.\s+.*結論/) || 
-          trimmedLine.match(/^結論/i)) {
-        currentMode = 'conclusion';
-        continue;
-      }
-      
-      // 現在のモードに応じてテキストを追加
-      if (currentMode === 'topic') {
-        if (!mainTopic) {
-          mainTopic = trimmedLine.replace(/^[-•*]\s+/, '');
-        }
-      } else if (currentMode === 'points') {
-        // 箇条書きの検出
-        if (trimmedLine.match(/^[-•*]\s+/) || trimmedLine.match(/^\d+\.\s+/)) {
-          keyPoints.push(trimmedLine.replace(/^[-•*\d\.]\s+/, ''));
-        } else if (keyPoints.length > 0) {
-          // 前の箇条書きの続きの場合
-          keyPoints[keyPoints.length - 1] += ' ' + trimmedLine;
-        } else {
-          // 箇条書きでない場合は新しいポイントとして追加
-          keyPoints.push(trimmedLine);
-        }
-      } else if (currentMode === 'conclusion') {
-        if (conclusion) {
-          conclusion += ' ' + trimmedLine;
-        } else {
-          conclusion = trimmedLine;
+      if (bulletPointsMatch) {
+        // 箇条書きとして検出された行を処理
+        keyPoints = bulletPointsMatch.map(point => {
+          // 箇条書き記号と先頭の空白を削除
+          return point.trim().replace(/^[-•*\d\.\)]\s*/, '');
+        });
+      } else {
+        // 箇条書きが見つからない場合は段落ごとに分割
+        keyPoints = pointsSection.split(/\n\s*\n/).filter(p => p.trim());
+        
+        // 各段落が長すぎる場合は、さらに文単位で分割することを検討
+        if (keyPoints.length <= 1 && pointsSection.length > 100) {
+          const sentences = pointsSection.match(/[^.!?。？！]+[.!?。？！]+/g) || [];
+          if (sentences.length > 1) {
+            keyPoints = sentences.map(s => s.trim());
+          }
         }
       }
     }
     
-    // 解析結果が不十分な場合は、単純に分割
-    if (!mainTopic && !keyPoints.length && !conclusion) {
-      const parts = summaryText.split('\n\n');
-      if (parts.length >= 3) {
-        mainTopic = parts[0];
+    // 解析結果が不十分な場合は、テキスト全体を構造化してみる
+    if ((!mainTopic && !keyPoints.length && !conclusion) || 
+        (keyPoints.length === 0 && mainTopic.length + conclusion.length < normalizedText.length * 0.3)) {
+      
+      // テキストを段落に分割
+      const paragraphs = normalizedText.split(/\n\s*\n/).filter(p => p.trim());
+      
+      if (paragraphs.length >= 3) {
+        // 最低3つの段落がある場合、最初を主なトピック、真ん中をポイント、最後を結論とする
+        mainTopic = mainTopic || paragraphs[0];
         
-        // 中間部分を箇条書きとして解析
-        const middlePart = parts[1];
-        keyPoints = middlePart.split('\n')
-          .filter(line => line.trim() !== '')
-          .map(line => line.replace(/^[-•*\d\.]\s+/, ''));
+        // 中間の段落をポイントとして使用
+        if (keyPoints.length === 0) {
+          const middleParagraphs = paragraphs.slice(1, -1);
+          
+          for (const paragraph of middleParagraphs) {
+            // 箇条書きの行を検出して分割
+            const bulletPoints = paragraph.split(/\n/).filter(line => line.trim());
+            keyPoints.push(...bulletPoints.map(line => line.replace(/^[-•*\d\.\)]\s*/, '')));
+          }
+        }
         
-        conclusion = parts[2];
-      } else {
-        // 十分な分割ができない場合は、全体を表示
-        mainTopic = summaryText;
+        conclusion = conclusion || paragraphs[paragraphs.length - 1];
+      } else if (paragraphs.length === 2) {
+        // 2つの段落しかない場合
+        mainTopic = mainTopic || paragraphs[0];
+        conclusion = conclusion || paragraphs[1];
+      } else if (paragraphs.length === 1) {
+        // テキスト全体が1つの段落の場合
+        mainTopic = normalizedText;
       }
     }
     
