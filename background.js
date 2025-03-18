@@ -32,9 +32,28 @@ function extractVideoId(url) {
   return (match && match[2].length === 11) ? match[2] : null;
 }
 
+// 要約中のタブIDを保持する変数（重複ウィンドウの防止用）
+let processingSummaryTab = null;
+
 // ビデオ情報を取得して要約する関数
 async function fetchVideoInfoAndSummarize(videoId) {
   try {
+    // 処理中の場合は重複実行しない
+    if (processingSummaryTab) {
+      try {
+        // タブが存在するか確認
+        const tab = await chrome.tabs.get(processingSummaryTab);
+        // タブが存在する場合は、そのタブにフォーカス
+        if (tab) {
+          chrome.tabs.update(processingSummaryTab, { active: true });
+          return;
+        }
+      } catch (error) {
+        // タブが存在しない場合は処理を続行（processingSummaryTabをリセット）
+        processingSummaryTab = null;
+      }
+    }
+    
     // ストレージからAPIキーを取得
     const { geminiApiKey } = await chrome.storage.sync.get('geminiApiKey');
     
@@ -44,46 +63,79 @@ async function fetchVideoInfoAndSummarize(videoId) {
       return;
     }
     
-    // YouTube Data APIを使用してビデオ情報を取得（実際の実装ではAPIキーが必要）
-    // ここでは簡略化のため、直接YouTubeページから情報を取得する方法を使用
+    // 処理中のタブを作成
     chrome.tabs.create({ url: `https://www.youtube.com/watch?v=${videoId}`, active: false }, async (tab) => {
-      // タブが完全に読み込まれるのを待つ
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // 新しいタブIDを保存
+      processingSummaryTab = tab.id;
       
-      // コンテンツスクリプトを実行してビデオ情報を取得
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        function: getVideoInfo
-      }, async (results) => {
-        if (chrome.runtime.lastError || !results || !results[0]) {
-          console.error("ビデオ情報の取得に失敗しました", chrome.runtime.lastError);
-          chrome.tabs.remove(tab.id);
+      try {
+        // タブが完全に読み込まれるのを待つ
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // コンテンツスクリプトを実行してビデオ情報を取得
+        const infoResults = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          function: getVideoInfo
+        });
+        
+        if (!infoResults || !infoResults[0]) {
+          throw new Error("ビデオ情報の取得に失敗しました");
+        }
+        
+        const videoInfo = infoResults[0].result;
+        
+        // 字幕を取得する（同じタブで）
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          function: openTranscriptPanel
+        });
+        
+        // 字幕パネルが開くのを待つ
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // 字幕を取得
+        const captionResults = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          function: extractCaptionsFromPage
+        });
+        
+        // タブを閉じる（要約表示前に）
+        chrome.tabs.remove(tab.id);
+        processingSummaryTab = null;
+        
+        if (!captionResults || !captionResults[0]) {
+          throw new Error("字幕の取得に失敗しました");
+        }
+        
+        const captions = captionResults[0].result;
+        
+        // 字幕が取得できたかチェック
+        if (!captions || captions.trim().length === 0) {
+          // 字幕がない場合、その旨を表示
+          displaySummary(videoId, videoInfo.title, "この動画には字幕情報がないため、要約を生成できません。\n\n字幕が利用可能な動画で再度お試しください。");
           return;
         }
         
-        const videoInfo = results[0].result;
+        // Gemini AIで要約
+        const summary = await summarizeWithGemini(videoInfo, captions, geminiApiKey);
         
-        // 字幕を直接APIから取得
-        try {
-          // 字幕を取得
-          const captions = await fetchCaptionsViaAPI(videoId);
-          
-          // Gemini AIで要約
-          const summary = await summarizeWithGemini(videoInfo, captions, geminiApiKey);
-          
-          // 要約結果を表示
-          displaySummary(videoId, videoInfo.title, summary);
-        } catch (error) {
-          console.error("字幕の取得または要約中にエラーが発生しました", error);
-          displaySummary(videoId, videoInfo.title, "字幕の取得に失敗しました。この動画には字幕が提供されていないか、アクセスできません。");
+        // 要約結果を表示
+        displaySummary(videoId, videoInfo.title, summary);
+      } catch (error) {
+        console.error("要約処理中にエラーが発生しました", error);
+        
+        // エラーが発生した場合はタブを閉じて処理終了
+        if (processingSummaryTab) {
+          chrome.tabs.remove(processingSummaryTab);
+          processingSummaryTab = null;
         }
         
-        // 使用済みのタブを閉じる
-        chrome.tabs.remove(tab.id);
-      });
+        displaySummary(videoId, "要約エラー", "要約処理中にエラーが発生しました。もう一度お試しください。");
+      }
     });
   } catch (error) {
-    console.error("要約処理中にエラーが発生しました", error);
+    console.error("要約処理の初期化中にエラーが発生しました", error);
+    processingSummaryTab = null;
   }
 }
 
@@ -174,7 +226,6 @@ function getVideoInfo() {
   // カテゴリを取得
   const category = document.querySelector('meta[itemprop="genre"]')?.content || '';
   
-  // 字幕や説明を展開するための時間を少し設ける
   return {
     title,
     description,
@@ -187,156 +238,241 @@ function getVideoInfo() {
   };
 }
 
-// YouTubeの字幕をAPIから取得する関数
-async function fetchCaptionsViaAPI(videoId) {
+// トランスクリプトパネルを開く関数（スクリプトとして実行）
+function openTranscriptPanel() {
+  // このログが表示されるか確認（デバッグ用）
+  console.log("トランスクリプトパネルを開く処理を開始します");
+  
   try {
-    // 複数の言語コードを試す
-    const languageCodes = ['ja', 'ja-JP', 'en', 'en-US', 'auto'];
-    let captionText = '';
-    
-    // 各言語で試行
-    for (const lang of languageCodes) {
-      // YouTubeの字幕を直接取得するURLを構築
-      const captionUrl = `https://www.youtube.com/api/timedtext?lang=${lang}&v=${videoId}`;
+    // ===== 方法1: ３点メニューからトランスクリプトを開く =====
+    const menuButton = document.querySelector('button.ytp-button[aria-label="その他の操作"]') || 
+                      document.querySelector('button.ytp-button[aria-label="More actions"]') ||
+                      document.querySelector('ytd-menu-renderer button#button') ||
+                      document.querySelector('button[aria-label="More"]');
+                      
+    if (menuButton) {
+      console.log("メニューボタンを発見しました");
+      menuButton.click();
       
-      try {
-        const response = await fetch(captionUrl);
-        if (!response.ok) {
-          continue; // この言語では取得できなかった、次の言語を試す
-        }
+      // メニューが開くのを待つ
+      setTimeout(() => {
+        // メニュー内のトランスクリプトオプションを探す
+        const transcriptItems = Array.from(document.querySelectorAll('ytd-menu-service-item-renderer, .ytp-menuitem, tp-yt-paper-item')).filter(item => 
+          item.textContent.includes('文字起こし') || 
+          item.textContent.includes('トランスクリプト') || 
+          item.textContent.includes('transcript') || 
+          item.textContent.includes('Transcript')
+        );
         
-        const xmlText = await response.text();
-        if (xmlText && xmlText.includes('<text')) {
-          // XMLから字幕テキストを抽出
-          captionText = parseTimedTextXML(xmlText);
-          if (captionText) {
-            // 成功した場合はループを抜ける
-            break;
+        console.log(`${transcriptItems.length}個のトランスクリプト関連アイテムを発見しました`);
+        
+        if (transcriptItems.length > 0) {
+          transcriptItems[0].click();
+          console.log("トランスクリプトメニューをクリックしました");
+          return;
+        }
+      }, 1000);
+    }
+    
+    // ===== 方法2: 専用の文字起こしボタンを探す =====
+    setTimeout(() => {
+      const transcriptButton = document.querySelector('button[aria-label="字幕"]') ||
+                            document.querySelector('button[aria-label="Subtitles/closed captions"]') ||
+                            document.querySelector('button.ytp-subtitles-button') ||
+                            document.querySelector('.caption-button');
+      
+      if (transcriptButton) {
+        console.log("専用の字幕ボタンを発見しました");
+        transcriptButton.click();
+      } else {
+        console.log("字幕ボタンが見つかりませんでした");
+      }
+    }, 1500);
+    
+    // ===== 方法3: 右クリックコンテキストメニューを試す =====
+    setTimeout(() => {
+      // 動画エレメントを取得
+      const videoElement = document.querySelector('video');
+      if (videoElement) {
+        console.log("動画要素を発見、コンテキストメニューを試みます");
+        
+        // 右クリックイベントをシミュレート
+        const contextMenuEvent = new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 2,
+          buttons: 2,
+        });
+        
+        videoElement.dispatchEvent(contextMenuEvent);
+        
+        // コンテキストメニューが表示されるのを待つ
+        setTimeout(() => {
+          // コンテキストメニュー内の字幕アイテムを探す
+          const captionMenuItem = Array.from(document.querySelectorAll('.ytp-contextmenu .ytp-menuitem')).find(item => 
+            item.textContent.includes('字幕') || 
+            item.textContent.includes('Subtitles') || 
+            item.textContent.includes('Captions')
+          );
+          
+          if (captionMenuItem) {
+            console.log("コンテキストメニューで字幕アイテムを発見しました");
+            captionMenuItem.click();
+          } else {
+            console.log("コンテキストメニューに字幕アイテムがありませんでした");
+          }
+        }, 500);
+      }
+    }, 2000);
+    
+  } catch (error) {
+    console.error("トランスクリプトパネルを開く際にエラーが発生しました", error);
+  }
+  
+  // 強制的に字幕トラックを有効化する試み
+  setTimeout(() => {
+    try {
+      const video = document.querySelector('video');
+      if (video && video.textTracks && video.textTracks.length > 0) {
+        console.log(`ビデオに${video.textTracks.length}個のテキストトラックがあります`);
+        for (let i = 0; i < video.textTracks.length; i++) {
+          if (video.textTracks[i].kind === 'subtitles' || video.textTracks[i].kind === 'captions') {
+            video.textTracks[i].mode = 'showing';
+            console.log(`テキストトラック${i}を表示状態にしました`);
           }
         }
-      } catch (error) {
-        console.warn(`言語 "${lang}" での字幕取得に失敗: ${error.message}`);
-        // このエラーは無視して次の言語を試す
+      } else {
+        console.log("ビデオにテキストトラックがありません");
+      }
+    } catch (e) {
+      console.error("テキストトラックの操作に失敗しました", e);
+    }
+  }, 2500);
+}
+
+// ページから字幕を抽出する関数（コンテンツスクリプトとして実行）
+function extractCaptionsFromPage() {
+  console.log("字幕抽出処理を開始します");
+  
+  try {
+    // ==== 方法1: 字幕パネルから抽出 ====
+    // トランスクリプト要素のセレクタを試す
+    const transcriptSelectors = [
+      'ytd-transcript-segment-renderer',
+      'ytd-transcript-body-renderer',
+      '.ytd-transcript-renderer',
+      '.ytd-transcript-segment-list-renderer',
+      '.cue-group', // 新しいUI
+      '.segment-text',
+      '.caption-visual-line',
+      '.ytd-engagement-panel-section-list-renderer' // パネル全体
+    ];
+    
+    let captionElements = [];
+    
+    // 各セレクタを試す
+    for (const selector of transcriptSelectors) {
+      const elements = document.querySelectorAll(selector);
+      if (elements && elements.length > 0) {
+        console.log(`セレクタ "${selector}" で字幕要素を${elements.length}個見つけました`);
+        captionElements = Array.from(elements);
+        break;
       }
     }
     
-    // 字幕が取得できなかった場合は代替APIも試す
-    if (!captionText) {
-      console.log("標準APIでの字幕取得に失敗、代替APIを試行します...");
-      captionText = await fetchCaptionsViaAlternativeAPI(videoId);
+    if (captionElements.length > 0) {
+      // 字幕要素が見つかった場合
+      const textResults = captionElements
+        .map(item => {
+          // 異なる構造に対応するため複数のセレクタを試す
+          const textElement = 
+            item.querySelector('#content') || 
+            item.querySelector('.segment-text') || 
+            item.querySelector('.caption-visual-line') || 
+            item;
+          
+          return textElement ? textElement.textContent.trim() : '';
+        })
+        .filter(text => text); // 空の文字列を除外
+      
+      if (textResults.length > 0) {
+        console.log(`${textResults.length}行の字幕テキストを抽出しました`);
+        return textResults.join('\n'); // 改行で結合して構造を保持
+      } else {
+        console.log("字幕要素は見つかりましたが、テキストを抽出できませんでした");
+      }
+    } else {
+      console.log("字幕要素が見つかりませんでした");
     }
     
-    return captionText;
-  } catch (error) {
-    console.error("すべての字幕取得方法に失敗しました", error);
-    return "";
-  }
-}
-
-// 代替方法でYouTubeの字幕を取得する関数
-async function fetchCaptionsViaAlternativeAPI(videoId) {
-  try {
-    // YouTubeの非公式APIで字幕リストを取得
-    const listUrl = `https://video.google.com/timedtext?type=list&v=${videoId}`;
-    const listResponse = await fetch(listUrl);
-    const listXml = await listResponse.text();
-    
-    // 字幕トラックがあるか確認
-    if (!listXml || !listXml.includes('<track')) {
-      return "";
-    }
-    
-    // 利用可能な字幕トラックから言語とトラックIDを抽出
-    const trackMatches = listXml.match(/<track([^>]*)>/g);
-    if (!trackMatches || trackMatches.length === 0) {
-      return "";
-    }
-    
-    // 優先順位: 日本語 > 英語 > その他
-    const preferredLangs = ['ja', 'jp', 'en', ''];
-    let targetTrack = null;
-    
-    for (const prefLang of preferredLangs) {
-      // 優先言語に合致するトラックを探す
-      for (const track of trackMatches) {
-        if (prefLang === '' || track.toLowerCase().includes(`lang_code="${prefLang}"`)) {
-          targetTrack = track;
-          break;
+    // ==== 方法2: ビデオ要素から字幕を取得 ====
+    const videoElement = document.querySelector('video');
+    if (videoElement && videoElement.textTracks && videoElement.textTracks.length > 0) {
+      console.log(`ビデオに${videoElement.textTracks.length}個のテキストトラックがあります`);
+      
+      for (let i = 0; i < videoElement.textTracks.length; i++) {
+        const track = videoElement.textTracks[i];
+        
+        if (track.kind === 'subtitles' || track.kind === 'captions') {
+          console.log(`テキストトラック${i}は字幕です`);
+          track.mode = 'showing';
+          
+          // 少し待機して字幕が読み込まれるのを待つ
+          console.log(`テキストトラック${i}のcues: ${track.cues ? track.cues.length : 'null'}`);
+          
+          if (track.cues && track.cues.length > 0) {
+            const captionLines = [];
+            for (let j = 0; j < track.cues.length; j++) {
+              captionLines.push(track.cues[j].text);
+            }
+            
+            console.log(`テキストトラック${i}から${captionLines.length}行の字幕を抽出しました`);
+            return captionLines.join('\n');
+          }
         }
       }
-      
-      if (targetTrack) break;
     }
     
-    if (!targetTrack) {
-      // 言語指定なしで最初のトラックを試す
-      targetTrack = trackMatches[0];
-    }
+    // ==== 方法3: ページのHTMLから字幕データを直接探す ====
+    const pageHtml = document.documentElement.outerHTML;
+    const captionDataMatch = pageHtml.match(/"captionTracks":\s*(\[.*?\])/);
     
-    // トラックから言語コードとトラックIDを抽出
-    const langMatch = targetTrack.match(/lang_code="([^"]*)"/);
-    const nameMatch = targetTrack.match(/name="([^"]*)"/);
-    
-    if (!langMatch) {
-      return "";
-    }
-    
-    const langCode = langMatch[1];
-    const trackName = nameMatch ? nameMatch[1] : "";
-    
-    // 特定の言語の字幕を取得
-    const captionUrl = `https://video.google.com/timedtext?lang=${langCode}${trackName ? `&name=${encodeURIComponent(trackName)}` : ""}&v=${videoId}`;
-    const response = await fetch(captionUrl);
-    
-    if (!response.ok) {
-      return "";
-    }
-    
-    const xmlText = await response.text();
-    if (!xmlText || !xmlText.includes('<text')) {
-      return "";
-    }
-    
-    // XMLから字幕テキストを抽出
-    return parseTimedTextXML(xmlText);
-  } catch (error) {
-    console.error("代替API経由での字幕取得に失敗しました", error);
-    return "";
-  }
-}
-
-// XML形式の字幕データからテキストを抽出する関数
-function parseTimedTextXML(xmlText) {
-  try {
-    // XMLパーサーを使用
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-    
-    // すべてのtextノードを取得
-    const textNodes = xmlDoc.getElementsByTagName('text');
-    if (!textNodes || textNodes.length === 0) {
-      return "";
-    }
-    
-    // 各テキストノードからテキストを抽出し連結
-    let captionText = '';
-    for (let i = 0; i < textNodes.length; i++) {
-      // HTMLエンティティをデコードして追加
-      const textContent = textNodes[i].textContent
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&amp;/g, '&')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'");
-      
-      if (textContent.trim()) {
-        captionText += textContent.trim() + '\n';
+    if (captionDataMatch && captionDataMatch[1]) {
+      try {
+        const captionJson = JSON.parse(captionDataMatch[1].replace(/\\"/g, '"').replace(/\\\\u/g, '\\u'));
+        
+        if (captionJson && captionJson.length > 0) {
+          console.log(`ページから${captionJson.length}個の字幕トラックを発見しました`);
+          
+          // 字幕URLがある場合、それを返す（字幕URLは後で別の方法で取得する必要がある）
+          const captionUrls = captionJson.map(track => track.baseUrl || track.url || '').filter(Boolean);
+          
+          if (captionUrls.length > 0) {
+            console.log(`${captionUrls.length}個の字幕URLを発見しました`);
+            return `CAPTION_URLS:${JSON.stringify(captionUrls)}`;
+          }
+        }
+      } catch (e) {
+        console.error("字幕JSONの解析に失敗しました", e);
       }
     }
     
-    return captionText;
+    // ==== 方法4: 最後の手段として字幕が有効かどうかだけでも取得 ====
+    const hasCaptionButton = !!document.querySelector('.ytp-subtitles-button[aria-pressed="true"]');
+    const hasTranscriptButton = !!document.querySelector('[aria-label="字幕"]') || 
+                              !!document.querySelector('[aria-label="Subtitles/closed captions"]');
+    
+    if (hasCaptionButton || hasTranscriptButton) {
+      console.log("字幕ボタンが存在しますが、内容を取得できませんでした");
+      return "CAPTION_AVAILABLE:字幕が存在しますが、内容を抽出できませんでした。";
+    }
+    
+    // 字幕が見つからなかった場合
+    console.log("字幕データが見つかりませんでした");
+    return "";
   } catch (error) {
-    console.error("字幕XMLの解析に失敗しました", error);
+    console.error("字幕抽出中にエラーが発生しました", error);
     return "";
   }
 }
@@ -346,9 +482,14 @@ async function summarizeWithGemini(videoInfo, captions, apiKey) {
   try {
     const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
     
-    // 字幕があるかどうかをチェック
-    if (!captions || captions.trim().length === 0) {
-      return "この動画には字幕情報がないため、要約を生成できません。\n\n字幕が利用可能な動画で再度お試しください。";
+    // captionUrlsが含まれている場合の処理（今回の実装では使用しない）
+    if (captions.startsWith('CAPTION_URLS:')) {
+      return "字幕データが取得できましたが、内容を抽出できませんでした。\n開発者向け情報: 字幕URLが存在します。";
+    }
+    
+    // 字幕はあるが内容が取得できない場合
+    if (captions.startsWith('CAPTION_AVAILABLE:')) {
+      return "字幕は存在しますが、内容を取得できませんでした。\n別の動画で再度お試しください。";
     }
     
     // 字幕のみを使用した要約のためのプロンプト
