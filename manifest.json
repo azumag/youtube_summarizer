@@ -11,7 +11,8 @@
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
-    "https://ai.google.dev/*"
+    "https://ai.google.dev/*",
+    "https://gemini.google.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -23,6 +24,11 @@
     {
       "matches": ["https://www.youtube.com/*"],
       "js": ["content.js"]
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["gemini-content.js"],
+      "run_at": "document_idle"
     }
   ]
 }
