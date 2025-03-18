@@ -41,7 +41,7 @@ function saveApiKey() {
 
 // 保存されているAPIキーを取得して表示する関数
 function loadApiKey() {
-  chrome.storage.sync.get('geminiApiKey', 'youtubeApiKey', (data) => {
+  chrome.storage.sync.get(['geminiApiKey', 'youtubeApiKey'], (data) => {
     if (data.geminiApiKey) {
       document.getElementById('apiKey').value = data.geminiApiKey;
     }
