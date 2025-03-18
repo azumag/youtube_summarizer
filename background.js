@@ -393,6 +393,7 @@ async function summarizeWithGemini(videoInfo, apiKey) {
 あなたは正確な要約を生成する専門家です。以下のYouTube動画の内容を提供された情報のみに基づいて要約してください。推測や憶測は厳禁です。
 
 # 動画情報
+URL: ${videoInfo.url}
 タイトル: ${videoInfo.title}
 チャンネル: ${videoInfo.channelName}
 公開日: ${videoInfo.publishDate || '不明'}
