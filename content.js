@@ -111,16 +111,25 @@ function getVideoInfo() {
 
 // YouTubeのリンクにコンテキストメニューを追加するための処理
 document.addEventListener('mousedown', (event) => {
-  // 右クリックされた要素がYouTubeの動画リンクかどうかを確認
-  if (event.button === 2) { // 右クリック
-    const target = event.target.closest('a');
-    if (target && isYouTubeVideoLink(target.href)) {
-      // この要素は右クリックメニューでの処理対象
-      chrome.runtime.sendMessage({
-        action: "enableContextMenu",
-        linkUrl: target.href
-      });
+  try {
+    // 右クリックされた要素がYouTubeの動画リンクかどうかを確認
+    if (event.button === 2) { // 右クリック
+      const target = event.target.closest('a');
+      if (target && isYouTubeVideoLink(target.href) && chrome && chrome.runtime) {
+        // この要素は右クリックメニューでの処理対象
+        // chrome.runtimeが利用可能かチェックしてからsendMessageを呼び出す
+        chrome.runtime.sendMessage({
+          action: "enableContextMenu",
+          linkUrl: target.href
+        }).catch(error => {
+          // エラーが発生した場合は静かに処理を続行
+          console.debug('コンテキストメニュー情報の送信に失敗しました:', error);
+        });
+      }
     }
+  } catch (error) {
+    // エラーが発生した場合は静かに処理を続行
+    console.debug('右クリックイベント処理中にエラーが発生しました:', error);
   }
 });
 
@@ -128,4 +137,9 @@ document.addEventListener('mousedown', (event) => {
 function isYouTubeVideoLink(url) {
   if (!url) return false;
   return url.includes('youtube.com/watch?v=') || url.includes('youtu.be/');
+}
+
+// chrome.runtimeが使用可能かどうかを確認
+if (typeof chrome === 'undefined' || !chrome.runtime) {
+  console.debug('このページではchrome.runtimeが利用できません。一部の機能が動作しない可能性があります。');
 }
