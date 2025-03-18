@@ -79,6 +79,8 @@ async function fetchVideoInfoAndSummarize(videoId) {
     }
     
     const captions = await getYouTubeCaptions(videoId, youtubeApiKey);
+
+    console.log(captions);
         
     // 字幕が取得できたかチェック
     if (!captions || captions.trim().length === 0) {
