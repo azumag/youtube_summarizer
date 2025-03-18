@@ -392,8 +392,11 @@ function injectPrompt(prompt) {
       const sendButton = findElementByMultipleSelectors(buttonSelectors);
       
       if (sendButton) {
-        console.log('送信ボタンが見つかりました。クリックします');
-        sendButton.click();
+        console.log('送信ボタンが見つかりました。クリックする前に待機します');
+        setTimeout(() => {
+          console.log('送信ボタンをクリックします');
+          sendButton.click();
+        }, 1000); // ボタンをクリックするまで1秒待機
         return;
       }
       
