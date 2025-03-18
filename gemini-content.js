@@ -143,7 +143,7 @@ function injectPromptAndSubmit(prompt) {
         cancelable: true
       }));
       
-    }, 1000); // ボタンを探すまでの待機時間を長めに設定
+    }, 3000); // ボタンを探すまでの待機時間を長めに設定
   } else {
     console.error('プロンプト入力欄が見つかりませんでした。ページ構造:', document.body.innerHTML.substring(0, 500) + '...');
   }
