@@ -289,23 +289,3 @@ function displaySummary(videoId, title, summary) {
     height: 600
   });
 }
-
-// 拡張機能の起動時にconfig.jsonを読み込む
-chrome.runtime.onInstalled.addListener(() => {
-  loadConfig();
-});
-
-// config.jsonを読み込む関数
-function loadConfig() {
-  fetch(chrome.runtime.getURL('config.json'))
-    .then(response => response.json())
-    .then(config => {
-      // クライアントIDをストレージに保存
-      chrome.storage.local.set({ oauthClientId: config.client_id }, () => {
-        console.log('OAuth クライアントIDを読み込みました');
-      });
-    })
-    .catch(error => {
-      console.error('config.json の読み込みに失敗しました:', error);
-    });
-}

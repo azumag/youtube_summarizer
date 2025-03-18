@@ -58,16 +58,16 @@ Chrome拡張機能を作成して、YouTubeの動画をGemini AIで要約しま�
    - 「作成」をクリックします
    - クライアントIDが生成されます
 
-5. config.json ファイルを作成します
-   - リポジトリには `config.json.example` ファイルが含まれています
-   - このファイルをコピーして `config.json` という名前で保存します
-   - `client_id` の値を、生成されたクライアントIDに置き換えます
+5. manifest.jsonを更新します
+   - manifest.jsonファイル内の`oauth2.client_id`の値を、生成されたクライアントIDに置き換えます
    ```json
-   {
-     "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com"
+   "oauth2": {
+     "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+     "scopes": [
+       "https://www.googleapis.com/auth/youtube.force-ssl"
+     ]
    }
    ```
-   - 注意: `config.json` ファイルは `.gitignore` に含まれているため、Git リポジトリにコミットされません（セキュリティのため）
 
 6. 拡張機能を再読み込みします
    - Chrome拡張機能の管理ページで、YouTube Summarizerの「詳細」をクリックします
