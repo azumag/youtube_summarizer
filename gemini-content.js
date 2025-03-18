@@ -122,8 +122,11 @@ function injectPromptAndSubmit(prompt) {
       const sendButton = findElementByMultipleSelectors(buttonSelectors);
       
       if (sendButton) {
-        console.log('送信ボタンが見つかりました。クリックします');
-        sendButton.click();
+        console.log('送信ボタンが見つかりました。クリックする前に待機します');
+        setTimeout(() => {
+          console.log('送信ボタンをクリックします');
+          sendButton.click();
+        }, 1000); // ボタンをクリックするまで1秒待機
         return;
       }
       
@@ -143,7 +146,7 @@ function injectPromptAndSubmit(prompt) {
         cancelable: true
       }));
       
-    }, 3000); // ボタンを探すまでの待機時間を長めに設定
+    }, 1000); // ボタンを探すまでの待機時間を長めに設定
   } else {
     console.error('プロンプト入力欄が見つかりませんでした。ページ構造:', document.body.innerHTML.substring(0, 500) + '...');
   }
