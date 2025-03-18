@@ -56,46 +56,59 @@ function loadApiKey() {
 
 // Googleで認証する関数
 function authenticateWithGoogle() {
-  chrome.identity.getAuthToken({ interactive: true }, (token) => {
-    if (chrome.runtime.lastError) {
-      console.error('認証エラー:', chrome.runtime.lastError);
-      updateAuthStatus(false, chrome.runtime.lastError.message);
+  // ストレージからクライアントIDを取得
+  chrome.storage.local.get('oauthClientId', (data) => {
+    if (!data.oauthClientId) {
+      console.error('OAuth クライアントIDが見つかりません');
+      updateAuthStatus(false, 'OAuth クライアントIDが設定されていません。config.jsonを確認してください。');
       return;
     }
     
-    if (token) {
-      // トークンをストレージに保存
-      chrome.storage.sync.set({ youtubeAuthToken: token }, () => {
-        updateAuthStatus(true);
-        
-        // トークンの有効性を確認するためにユーザー情報を取得
-        fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
-          headers: {
-            'Authorization': 'Bearer ' + token
-          }
-        })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error('トークンが無効です');
-          }
-          return response.json();
-        })
-        .then(userInfo => {
-          // ユーザー情報を表示（オプション）
-          console.log('認証されたユーザー:', userInfo.email);
-        })
-        .catch(error => {
-          console.error('ユーザー情報の取得に失敗しました:', error);
-          // トークンが無効な場合は削除
-          chrome.identity.removeCachedAuthToken({ token }, () => {
-            chrome.storage.sync.remove('youtubeAuthToken');
-            updateAuthStatus(false, 'トークンが無効です。再度認証してください。');
+    // クライアントIDを使用して認証
+    chrome.identity.getAuthToken({ 
+      interactive: true,
+      client_id: data.oauthClientId
+    }, (token) => {
+      if (chrome.runtime.lastError) {
+        console.error('認証エラー:', chrome.runtime.lastError);
+        updateAuthStatus(false, chrome.runtime.lastError.message);
+        return;
+      }
+      
+      if (token) {
+        // トークンをストレージに保存
+        chrome.storage.sync.set({ youtubeAuthToken: token }, () => {
+          updateAuthStatus(true);
+          
+          // トークンの有効性を確認するためにユーザー情報を取得
+          fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
+            headers: {
+              'Authorization': 'Bearer ' + token
+            }
+          })
+          .then(response => {
+            if (!response.ok) {
+              throw new Error('トークンが無効です');
+            }
+            return response.json();
+          })
+          .then(userInfo => {
+            // ユーザー情報を表示（オプション）
+            console.log('認証されたユーザー:', userInfo.email);
+          })
+          .catch(error => {
+            console.error('ユーザー情報の取得に失敗しました:', error);
+            // トークンが無効な場合は削除
+            chrome.identity.removeCachedAuthToken({ token }, () => {
+              chrome.storage.sync.remove('youtubeAuthToken');
+              updateAuthStatus(false, 'トークンが無効です。再度認証してください。');
+            });
           });
         });
-      });
-    } else {
-      updateAuthStatus(false, '認証に失敗しました。再度お試しください。');
-    }
+      } else {
+        updateAuthStatus(false, '認証に失敗しました。再度お試しください。');
+      }
+    });
   });
 }
 
