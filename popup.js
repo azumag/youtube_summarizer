@@ -13,17 +13,17 @@ document.addEventListener('DOMContentLoaded', () => {
 // APIキーを保存する関数
 function saveApiKey() {
   const apiKey = document.getElementById('apiKey').value.trim();
-  const ytApiKey = document.getElementById('ytApiKey').value.trim();
+  
   const statusElement = document.getElementById('status');
   
-  if (!apiKey || !ytApiKey) {
+  if (!apiKey) {
     statusElement.textContent = 'APIキーを入力してください';
     statusElement.className = 'status error';
     return;
   }
   
   // APIキーをChromeのストレージに保存
-  chrome.storage.sync.set({ geminiApiKey: apiKey, youtubeApiKey: ytApiKey }, () => {
+  chrome.storage.sync.set({geminiApiKey: apiKey}, () => {
     if (chrome.runtime.lastError) {
       statusElement.textContent = 'エラー: ' + chrome.runtime.lastError.message;
       statusElement.className = 'status error';
@@ -41,12 +41,9 @@ function saveApiKey() {
 
 // 保存されているAPIキーを取得して表示する関数
 function loadApiKey() {
-  chrome.storage.sync.get(['geminiApiKey', 'youtubeApiKey'], (data) => {
+  chrome.storage.sync.get('geminiApiKey', (data) => {
     if (data.geminiApiKey) {
       document.getElementById('apiKey').value = data.geminiApiKey;
-    }
-    if (data.youtubeApiKey) {
-      document.getElementById('ytApiKey').value = data.youtubeApiKey;
     }
   });
 }

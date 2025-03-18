@@ -61,7 +61,8 @@ function extractVideoId(url) {
 //   }
 // }
 
-async function getYouTubeCaptions(videoId, apiKey) {
+async function getYouTubeCaptions(videoId) {
+  // ここは Oauth を使う様に再実装する必要がある
   const apiUrl = `https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${videoId}&key=${apiKey}`;
 
   try {
@@ -97,19 +98,8 @@ async function fetchVideoInfoAndSummarize(videoId) {
       chrome.runtime.openOptionsPage();
       return;
     }
-
-    // ストレージからAPIキーを取得
-    const { youtubeApiKey } = await chrome.storage.sync.get('youtubeApiKey');
-  
-    if (!youtubeApiKey) {
-      // APIキーが設定されていない場合は設定画面を開く
-      chrome.runtime.openOptionsPage();
-      return;
-    }
     
-    const captions = await getYouTubeCaptions(videoId, youtubeApiKey);
-
-    console.log(captions);
+    const captions = await getYouTubeCaptions(videoId);
         
     // 字幕が取得できたかチェック
     if (!captions || captions.trim().length === 0) {
